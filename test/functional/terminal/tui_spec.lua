@@ -734,6 +734,15 @@ describe('TUI', function()
   end)
 
   it('paste: split "start paste" code', function()
+    child_session:request('nvim_exec_lua', [[
+      _G.paste_phases = {}
+      vim.paste = (function(overridden)
+        return function(lines, phase)
+          table.insert(_G.paste_phases, phase)
+          overridden(lines, phase)
+        end
+      end)(vim.paste)
+    ]], {})
     feed_data('i')
     -- Send split "start paste" sequence.
     feed_data('\027[2')
@@ -747,13 +756,24 @@ describe('TUI', function()
       {3:-- INSERT --}                                      |
       {3:-- TERMINAL --}                                    |
     ]])
+    screen:expect_unchanged()
+    local _, rv = child_session:request('nvim_exec_lua', [[return _G.paste_phases]], {})
+    eq({-1}, rv)
   end)
 
   it('paste: split "stop paste" code', function()
+    child_session:request('nvim_exec_lua', [[
+      _G.paste_phases = {}
+      vim.paste = (function(overridden)
+        return function(lines, phase)
+          table.insert(_G.paste_phases, phase)
+          overridden(lines, phase)
+        end
+      end)(vim.paste)
+    ]], {})
     feed_data('i')
     -- Send split "stop paste" sequence.
-    feed_data('\027[200~pasted from terminal\027[20')
-    feed_data('1~')
+    feed_data('\027[200~pasted from terminal\027[20')  -- phase 1
     screen:expect([[
       pasted from terminal{1: }                             |
       {4:~                                                 }|
@@ -763,6 +783,55 @@ describe('TUI', function()
       {3:-- INSERT --}                                      |
       {3:-- TERMINAL --}                                    |
     ]])
+    local _, rv = child_session:request('nvim_exec_lua', [[return _G.paste_phases]], {})
+    eq({1}, rv)
+    -- Remaining part of "stop paste" sequence
+    feed_data('1~')  -- phase 3
+    screen:expect_unchanged()
+    _, rv = child_session:request('nvim_exec_lua', [[return _G.paste_phases]], {})
+    eq({1, 3}, rv)
+  end)
+
+  it('paste: streamed paste with isolated "stop paste" code', function()
+    child_session:request('nvim_exec_lua', [[
+      _G.paste_phases = {}
+      vim.paste = (function(overridden)
+        return function(lines, phase)
+          table.insert(_G.paste_phases, phase)
+          overridden(lines, phase)
+        end
+      end)(vim.paste)
+    ]], {})
+    feed_data('i')
+    feed_data('\027[200~pasted')  -- phase 1
+    screen:expect([[
+      pasted{1: }                                           |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    local _, rv = child_session:request('nvim_exec_lua', [[return _G.paste_phases]], {})
+    eq({1}, rv)
+    feed_data(' from terminal')  -- phase 2
+    screen:expect([[
+      pasted from terminal{1: }                             |
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {4:~                                                 }|
+      {5:[No Name] [+]                                     }|
+      {3:-- INSERT --}                                      |
+      {3:-- TERMINAL --}                                    |
+    ]])
+    _, rv = child_session:request('nvim_exec_lua', [[return _G.paste_phases]], {})
+    eq({1, 2}, rv)
+    -- Send isolated "stop paste" sequence.
+    feed_data('\027[201~')  -- phase 3
+    screen:expect_unchanged()
+    _, rv = child_session:request('nvim_exec_lua', [[return _G.paste_phases]], {})
+    eq({1, 2, 3}, rv)
   end)
 
   it('allows termguicolors to be set at runtime', function()
